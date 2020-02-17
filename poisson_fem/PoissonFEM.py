@@ -160,7 +160,7 @@ class Mesh:
 
 class RectangularMesh(Mesh):
     # Assuming a unit square domain
-    def __init__(self, grid_x=np.ones(4)/4, grid_y=None):
+    def __init__(self, grid_x=torch.ones(4)/4, grid_y=None):
         # Grid vectors grid_x, grid_y give the edge lengths
 
         super().__init__()
@@ -169,12 +169,12 @@ class RectangularMesh(Mesh):
             grid_y = grid_x
 
         # Create vertices
-        x_coord = np.concatenate((np.array([.0]), np.cumsum(grid_x)))
-        y_coord = np.concatenate((np.array([.0]), np.cumsum(grid_y)))
+        x_coord = torch.cat((torch.zeros(1), torch.cumsum(grid_x, 0)))
+        y_coord = torch.cat((torch.zeros(1), torch.cumsum(grid_y, 0)))
         n = 0
         for row_index, y in enumerate(y_coord):
             for col_index, x in enumerate(x_coord):
-                self.create_vertex(np.array([x, y]), globalVertexNumber=n, row_index=row_index, col_index=col_index)
+                self.create_vertex(torch.tensor([x, y]), globalVertexNumber=n, row_index=row_index, col_index=col_index)
                 n += 1
 
         self.essential_solution_vector = PETSc.Vec().createSeq(self.n_vertices)
@@ -269,7 +269,7 @@ class Cell:
 
     def compute_centroid(self):
         # Compute cell centroid
-        self.centroid = np.zeros(2)
+        self.centroid = torch.zeros(2)
         for vtx in self.vertices:
             self.centroid += vtx.coordinates
         self.centroid /= len(self.vertices)
@@ -281,11 +281,10 @@ class Cell:
 
     def is_inside(self, x):
         # Checks if point x is inside of cell
-        return np.logical_and(np.logical_and(np.logical_and(
-                np.less(self.vertices[0].coordinates[0] - np.finfo(float).eps, x[:, 0]),
-                np.less_equal(x[:, 0], self.vertices[2].coordinates[0] + np.finfo(float).eps)),
-                np.less(self.vertices[0].coordinates[1] - np.finfo(float).eps, x[:, 1])),
-                np.less_equal(x[:, 1], self.vertices[2].coordinates[1] + np.finfo(float).eps))
+        return (((self.vertices[0].coordinates[0] - torch.finfo(torch.float32).eps < x[:, 0]) *
+                 (x[:, 0] <= self.vertices[2].coordinates[0] + torch.finfo(torch.float32).eps)) *
+                (self.vertices[0].coordinates[1] - torch.finfo(torch.float32).eps < x[:, 1])) *\
+               (x[:, 1] <= self.vertices[2].coordinates[1] + torch.finfo(torch.float32).eps)
 
     def element_shape_function_values(self, x):
         # Returns a list of the values [N_0^(c)(x), N_1^(c)(x), N_2^(c)(x), N_3^(c)(x)] of the element shape
@@ -310,7 +309,7 @@ class Edge:
     def __init__(self, vtx0, vtx1):
         self.vertices = [vtx0, vtx1]
         self.cells = []
-        self.length = np.linalg.norm(vtx0.coordinates - vtx1.coordinates)
+        self.length = torch.norm(vtx0.coordinates - vtx1.coordinates)
         self.is_natural = False       # True if edge is on natural boundary
 
     def add_cell(self, cell):
@@ -324,7 +323,7 @@ class Edge:
 
 
 class Vertex:
-    def __init__(self, coordinates=np.zeros((2, 1)), global_number=None, row_index=None, col_index=None):
+    def __init__(self, coordinates=torch.zeros((2, 1)), global_number=None, row_index=None, col_index=None):
         self.coordinates = coordinates
         self.cells = []
         self.edges = []
@@ -356,10 +355,10 @@ class FunctionSpace:
         # Computes shape function gradient matrices B, see Fish & Belytshko
 
         # Gauss quadrature points
-        xi0 = -1.0 / np.sqrt(3)
-        xi1 = 1.0 / np.sqrt(3)
+        xi0 = -1.0 / torch.sqrt(torch.tensor(3.0))
+        xi1 = 1.0 / torch.sqrt(torch.tensor(3.0))
 
-        self.shape_function_gradients = np.empty((8, 4, mesh.n_cells))
+        self.shape_function_gradients = torch.empty((8, 4, mesh.n_cells))
         for e in range(mesh.n_cells):
             # short hand notation
             x0 = mesh.cells[e].vertices[0].coordinates[0]
@@ -374,14 +373,14 @@ class FunctionSpace:
             yII = .5 * (y0 + y3) + .5 * xi1 * (y3 - y0)
 
             # B matrices for bilinear shape functions
-            B0 = np.array([[yI - y3, y3 - yI, yI - y0, y0 - yI], [xI - x1, x0 - xI, xI - x0, x1 - xI]])
-            B1 = np.array([[yII - y3, y3 - yII, yII - y0, y0 - yII], [xII - x1, x0 - xII, xII - x0, x1 - xII]])
-            B2 = np.array([[yI - y3, y3 - yI, yI - y0, y0 - yI], [xII - x1, x0 - xII, xII - x0, x1 - xII]])
-            B3 = np.array([[yII - y3, y3 - yII, yII - y0, y0 - yII], [xI - x1, x0 - xI, xI - x0, x1 - xI]])
+            B0 = torch.tensor([[yI - y3, y3 - yI, yI - y0, y0 - yI], [xI - x1, x0 - xI, xI - x0, x1 - xI]])
+            B1 = torch.tensor([[yII - y3, y3 - yII, yII - y0, y0 - yII], [xII - x1, x0 - xII, xII - x0, x1 - xII]])
+            B2 = torch.tensor([[yI - y3, y3 - yI, yI - y0, y0 - yI], [xII - x1, x0 - xII, xII - x0, x1 - xII]])
+            B3 = torch.tensor([[yII - y3, y3 - yII, yII - y0, y0 - yII], [xI - x1, x0 - xI, xI - x0, x1 - xI]])
 
             # Note:in Gauss quadrature, the differential transforms as dx = (l_x/2) d xi. Hence we take the
             # additional factor of sqrt(A)/2 onto B
-            self.shape_function_gradients[:, :, e] = (1 / (2 * np.sqrt(mesh.cells[e].surface))) * np.concatenate(
+            self.shape_function_gradients[:, :, e] = (1 / (2 * torch.sqrt(mesh.cells[e].surface))) * torch.cat(
                 (B0, B1, B2, B3))
 
     def state_dict(self):
@@ -425,27 +424,29 @@ class StiffnessMatrix:
 
     def compute_equation_indices(self):
         # Compute equation indices for direct assembly of stiffness matrix
-        equationIndices0 = np.array([], dtype=np.uint32)
-        equationIndices1 = np.array([], dtype=np.uint32)
-        locIndices0 = np.array([], dtype=np.uint32)
-        locIndices1 = np.array([], dtype=np.uint32)
-        cllIndex = np.array([], dtype=np.uint32)
+        equationIndices0 = torch.tensor([], dtype=torch.int32)
+        equationIndices1 = torch.tensor([], dtype=torch.int32)
+        locIndices0 = torch.tensor([], dtype=torch.int32)
+        locIndices1 = torch.tensor([], dtype=torch.int32)
+        cllIndex = torch.tensor([], dtype=torch.int32)
 
         for cll in self.mesh.cells:
-            equations = np.array([], dtype=np.uint32)
-            eqVertices = np.array([], dtype=np.uint32)
+            equations = torch.tensor([], dtype=torch.int32)
+            eqVertices = torch.tensor([], dtype=torch.int32)
             for v, vtx in enumerate(cll.vertices):
                 if vtx.equation_number is not None:
-                    equations = np.append(equations, np.array([vtx.equation_number], dtype=np.uint32))
-                    eqVertices = np.append(eqVertices, np.array([v], dtype=np.uint32))
+                    equations = torch.cat((equations, torch.tensor([vtx.equation_number], dtype=torch.int32)))
+                    eqVertices = torch.cat((eqVertices, torch.tensor([v], dtype=torch.int32)))
 
-            eq0, eq1 = np.meshgrid(equations, equations)
-            vtx0, vtx1 = np.meshgrid(eqVertices, eqVertices)
+            eq0, eq1 = torch.meshgrid(equations, equations)
+            vtx0, vtx1 = torch.meshgrid(eqVertices, eqVertices)
             equationIndices0 = np.append(equationIndices0, eq0.flatten())
             equationIndices1 = np.append(equationIndices1, eq1.flatten())
-            locIndices0 = np.append(locIndices0, vtx0.flatten())
-            locIndices1 = np.append(locIndices1, vtx1.flatten())
-            cllIndex = np.append(cllIndex, cll.number*np.ones_like(vtx0.flatten()))
+            locIndices0 = torch.cat((locIndices0, vtx0.flatten()))
+            locIndices1 = torch.cat((locIndices1, vtx1.flatten()))
+            cllIndex = torch.cat((cllIndex, cll.number*torch.ones_like(vtx0.flatten())))
+
+        # how is this done using torch
         k_index = np.ravel_multi_index((locIndices1, locIndices0, cllIndex), (4, 4, self.mesh.n_cells), order='F')
         return [equationIndices0, equationIndices1], k_index
 
@@ -454,9 +455,9 @@ class StiffnessMatrix:
         if self.funSpace.shape_function_gradients is None:
             self.funSpace.get_shape_function_gradient_matrix()
 
-        self.loc_stiff_grad = self.mesh.n_cells * [np.empty((4, 4))]
+        self.loc_stiff_grad = self.mesh.n_cells * [torch.empty((4, 4))]
         for e in range(self.mesh.n_cells):
-            self.loc_stiff_grad[e] = np.transpose(self.funSpace.shape_function_gradients[:, :, e])\
+            self.loc_stiff_grad[e] = (self.funSpace.shape_function_gradients[:, :, e]).T\
                                      @ self.funSpace.shape_function_gradients[:, :, e]
 
     def compute_glob_stiff_stencil(self):
@@ -467,17 +468,17 @@ class StiffnessMatrix:
 
         equation_indices, k_index = self.compute_equation_indices()
 
-        glob_stiff_stencil = np.empty((self.mesh.n_eq**2, self.mesh.n_cells))
+        glob_stiff_stencil = torch.empty((self.mesh.n_eq**2, self.mesh.n_cells))
 
         for e, cll in enumerate(self.mesh.cells):
-            grad_loc_k = np.zeros((4, 4, self.mesh.n_cells))
+            grad_loc_k = torch.zeros((4, 4, self.mesh.n_cells))
             grad_loc_k[:, :, e] = self.loc_stiff_grad[e]
-            grad_loc_k = grad_loc_k.flatten(order='F')
+            grad_loc_k = grad_loc_k.T.flatten()
             Ke = sps.csr_matrix((grad_loc_k[k_index], (equation_indices[0], equation_indices[1])))
-            Ke_dense = sps.csr_matrix.todense(Ke)
+            Ke_dense = torch.tensor(sps.csr_matrix.todense(Ke))
             # Ke = sps.csr_matrix(Ke_dense)
-            self.glob_stiff_grad[:, e, :] = torch.tensor(Ke_dense)
-            glob_stiff_stencil[:, e] = Ke_dense.flatten(order='F')
+            self.glob_stiff_grad[:, e, :] = Ke_dense
+            glob_stiff_stencil[:, e] = Ke_dense.T.flatten()
 
         self.glob_stiff_stencil_scipy = sps.csr_matrix(glob_stiff_stencil)
         glob_stiff_stencil = PETSc.Mat().createAIJ(
@@ -493,7 +494,7 @@ class StiffnessMatrix:
     def find_sparsity_pattern(self):
         # Computes sparsity pattern of stiffness matrix/stiffness matrix vector for fast matrix assembly
         test_vec = PETSc.Vec().createSeq(self.mesh.n_cells)
-        test_vec.setValues(range(self.mesh.n_cells), np.ones(self.mesh.n_cells))
+        test_vec.setValues(range(self.mesh.n_cells), torch.ones(self.mesh.n_cells))
         Kvec = PETSc.Vec().createSeq(self.mesh.n_eq**2)
 
         self.glob_stiff_stencil.mult(test_vec, Kvec)
@@ -543,7 +544,7 @@ class RightHandSide:
     def set_flux_boundary_condition(self, mesh, flux):
         # Contribution due to flux boundary conditions
 
-        self.flux_boundary_condition = np.zeros((4, mesh.n_cells))
+        self.flux_boundary_condition = torch.zeros((4, mesh.n_cells))
         for cll in mesh.cells:
             for edg in cll.edges:
                 if edg.is_natural:
@@ -554,12 +555,12 @@ class RightHandSide:
                     # Short hand notation
                     ll = cll.vertices[0].coordinates    # lower left
                     ur = cll.vertices[2].coordinates    # upper right
-                    if edg.vertices[0].coordinates[1] < np.finfo(float).eps and \
-                       edg.vertices[1].coordinates[1] < np.finfo(float).eps:
+                    if edg.vertices[0].coordinates[1] < torch.finfo(torch.float32).eps and \
+                       edg.vertices[1].coordinates[1] < torch.finfo(torch.float32).eps:
                         # lower boundary
                         for i in range(4):
                             def fun(x):
-                                q = flux(np.array([x, 0.0]))
+                                q = flux(torch.tensor([x, 0.0]))
                                 q = - q[1]      # scalar product with boundary
                                 if i == 0:
                                     N = (x - ur[0]) * (-ur[1])
@@ -575,12 +576,12 @@ class RightHandSide:
                             Intgrl = quad(fun, ll[0], ur[0])
                             self.flux_boundary_condition[i, cll.number] += Intgrl[0]
 
-                    elif edg.vertices[0].coordinates[0] > 1.0 - np.finfo(float).eps and \
-                         edg.vertices[1].coordinates[0] > 1.0 - np.finfo(float).eps:
+                    elif edg.vertices[0].coordinates[0] > torch.ones(1) - torch.finfo(torch.float32).eps and\
+                            edg.vertices[1].coordinates[0] > 1.0 - torch.finfo(torch.float32).eps:
                         # right boundary
                         for i in range(4):
                             def fun(y):
-                                q = flux(np.array([1.0, y]))
+                                q = flux(torch.tensor([1.0, y]))
                                 q = q[0]  # scalar product with boundary
                                 if i == 0:
                                     N = (1.0 - ur[0]) * (y - ur[1])
@@ -596,12 +597,12 @@ class RightHandSide:
                             Intgrl = quad(fun, ll[1], ur[1])
                             self.flux_boundary_condition[i, cll.number] += Intgrl[0]
 
-                    elif edg.vertices[0].coordinates[1] > 1.0 - np.finfo(float).eps and \
-                         edg.vertices[1].coordinates[1] > 1.0 - np.finfo(float).eps:
+                    elif edg.vertices[0].coordinates[1] > 1.0 - torch.finfo(torch.float32).eps and \
+                         edg.vertices[1].coordinates[1] > 1.0 - torch.finfo(torch.float32).eps:
                         # upper boundary
                         for i in range(4):
                             def fun(x):
-                                q = flux(np.array([x, 1.0]))
+                                q = flux(torch.tensor([x, 1.0]))
                                 q = q[1]  # scalar product with boundary
                                 if i == 0:
                                     N = (x - ur[0]) * (1.0 - ur[1])
@@ -617,12 +618,12 @@ class RightHandSide:
                             Intgrl = quad(fun, ll[0], ur[0])
                             self.flux_boundary_condition[i, cll.number] += Intgrl[0]
 
-                    elif edg.vertices[0].coordinates[0] < np.finfo(float).eps and \
-                         edg.vertices[1].coordinates[0] < np.finfo(float).eps:
+                    elif edg.vertices[0].coordinates[0] < torch.finfo(torch.float32).eps and \
+                         edg.vertices[1].coordinates[0] < torch.finfo(torch.float32).eps:
                         # left boundary
                         for i in range(4):
                             def fun(y):
-                                q = flux(np.array([0.0, y]))
+                                q = flux(torch.tensor([0.0, y]))
                                 q = -q[0]  # scalar product with boundary
                                 if i == 0:
                                     N = (- ur[0]) * (y - ur[1])
@@ -642,12 +643,12 @@ class RightHandSide:
         # Local force vector elements due to source field
 
         # Gauss points
-        xi0 = -1.0/np.sqrt(3)
-        xi1 = 1.0/np.sqrt(3)
-        eta0 = -1.0/np.sqrt(3)
-        eta1 = 1.0/np.sqrt(3)
+        xi0 = -1.0/torch.sqrt(torch.tensor(3))
+        xi1 = 1.0/torch.sqrt(torch.tensor(3))
+        eta0 = -1.0/torch.sqrt(torch.tensor(3))
+        eta1 = 1.0/torch.sqrt(torch.tensor(3))
 
-        self.source_field = np.zeros((4, mesh.n_cells))
+        self.source_field = torch.zeros((4, mesh.n_cells))
 
         for c, cll in enumerate(mesh.cells):
             # Short hand notation
@@ -677,7 +678,7 @@ class RightHandSide:
         if self.flux_boundary_condition is None:
             self.set_flux_boundary_condition(mesh, flux)
 
-        natural_rhs = np.zeros(mesh.n_eq)
+        natural_rhs = torch.zeros(mesh.n_eq)
         for e, cll in enumerate(mesh.cells):
             for v, vtx in enumerate(cll.vertices):
                 if vtx.equation_number is not None:
@@ -696,7 +697,7 @@ class RightHandSide:
     def set_rhs_stencil(self, mesh, stiffness_matrix):
         # rhs_stencil_np = np.zeros((mesh.n_eq, mesh.n_cells))
         for c in self.cells_with_essential_boundary:
-            essential_boundary_values = np.zeros(4)
+            essential_boundary_values = torch.zeros(4)
             for v, vtx in enumerate(mesh.cells[c].vertices):
                 if vtx.is_essential:
                     essential_boundary_values[v] = vtx.boundary_value
