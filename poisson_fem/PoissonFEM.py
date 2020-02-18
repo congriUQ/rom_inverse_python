@@ -479,6 +479,7 @@ class StiffnessMatrix:
         val_glob_stiff_grad = np.array([], dtype=np.float64)
 
         for e, cll in enumerate(self.mesh.cells):
+            # can be done more (memory) efficiently
             grad_loc_k = torch.zeros((4, 4, self.mesh.n_cells))
             grad_loc_k[:, :, e] = self.loc_stiff_grad[e]
             grad_loc_k = grad_loc_k.T.flatten()
@@ -492,7 +493,7 @@ class StiffnessMatrix:
             col_glob_stiff_grad = np.concatenate((col_glob_stiff_grad, Ke.col))
             val_glob_stiff_grad = np.concatenate((val_glob_stiff_grad, Ke.data))
             glob_stiff_stencil = sps.hstack((glob_stiff_stencil, Ke.T.reshape(self.mesh.n_eq**2, 1)))
-            
+
         glob_stiff_grad = sps.coo_matrix((val_glob_stiff_grad, (row_glob_stiff_grad, col_glob_stiff_grad))).tocsr()
         self.glob_stiff_stencil_scipy = sps.csr_matrix(glob_stiff_stencil)
         glob_stiff_stencil = PETSc.Mat().createAIJ(size=(self.mesh.n_eq**2, self.mesh.n_cells),
