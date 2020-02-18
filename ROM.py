@@ -9,6 +9,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import torch
 from poisson_fem import PoissonFEM
+import time
 
 
 
@@ -115,6 +116,7 @@ class ROM:
             def forward(ctx, lmbda):
                 # lmbda is a torch.tensor with requires_grad=True
                 # lmbda are !positive! diffusivities
+                t = time.time()
                 lmbda = lmbda.detach().numpy()
                 # for stability
                 lmbda[lmbda > 1e12] = 1e12
@@ -123,11 +125,13 @@ class ROM:
                 # scatter essential boundary conditions
                 self.set_full_solution()
                 self.interpolate_to_fine()
+                print('forward time == ', time.time() - t)
                 return torch.tensor(self.interpolated_solution.array, dtype=self.dtype)
 
             @staticmethod
             def backward(ctx, grad_output):
                 # grad_output = d_log_Pcf_duf_pred, uf_pred = W_cf * u_c
+                t = time.time()
                 self.grad_uf_pred.array = grad_output.detach().numpy()
                 # from grad w.r.t. uf_pred to grad w.r.t. uc_full (with b.c.)
                 self.mesh.interpolation_matrix.multTranspose(self.grad_uf_pred, self.grad_uc_full)
@@ -136,12 +140,24 @@ class ROM:
 
                 self.solve_adjoint(self.grad_uc)
                 # can this be optimized using PETSc only?
-                term0 = PETSc.Vec().createWithArray(-torch.matmul(torch.matmul(self.stiffnessMatrix.glob_stiff_grad,
-                            torch.tensor(self.solution.array, dtype=self.dtype)).t(),
-                                                     torch.tensor(self.adjoints.array, dtype=self.dtype)))
+                glob_stiff_grad_times_u = PETSc.Vec().createSeq(self.mesh.n_cells * self.mesh.n_eq)
+                self.stiffnessMatrix.glob_stiff_grad.mult(self.solution, glob_stiff_grad_times_u)
+                glob_stiff_grad_times_u = torch.tensor(glob_stiff_grad_times_u.array,
+                                                       dtype=self.dtype).view(self.mesh.n_cells, self.mesh.n_eq)
+                # print('glob_stiff_grad_times_u reshaped == ', glob_stiff_grad_times_u)
+                # expected = torch.matmul(self.stiffnessMatrix.glob_stiff_grad,
+                #             torch.tensor(self.solution.array, dtype=self.dtype)).t()
+                # print('expected tensor == ', expected)
+                # print('difference norm == ', torch.norm(glob_stiff_grad_times_u - expected))
+                # term0 = PETSc.Vec().createWithArray(-torch.matmul(torch.matmul(self.stiffnessMatrix.glob_stiff_grad,
+                #             torch.tensor(self.solution.array, dtype=self.dtype)).t(),
+                #                                      torch.tensor(self.adjoints.array, dtype=self.dtype)))
+                term0 = PETSc.Vec().createWithArray(-torch.matmul(glob_stiff_grad_times_u,
+                                                                  torch.tensor(self.adjoints.array, dtype=self.dtype)))
                 self.rhs.rhs_stencil.multTransposeAdd(self.adjoints, term0, self.grad)
 
                 # remove the unsqueeze once batched computation is implemented!!!
+                print('backward time == ', time.time() - t)
                 return torch.tensor(self.grad.array).unsqueeze(0)
         return AutogradROM.apply
 

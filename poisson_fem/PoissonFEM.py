@@ -8,6 +8,7 @@ petsc4py.init(sys.argv)
 from petsc4py import PETSc
 from scipy.integrate import quad
 import torch
+import time
 
 
 class Mesh:
@@ -401,7 +402,7 @@ class StiffnessMatrix:
 
         self.loc_stiff_grad = None
         # note the permutation; this is for fast computation of gradients via adjoints
-        self.glob_stiff_grad = torch.empty((mesh.n_eq, mesh.n_cells, mesh.n_eq))
+        self.glob_stiff_grad = None
         self.glob_stiff_stencil = None
         self.glob_stiff_stencil_scipy = None
 
@@ -461,35 +462,54 @@ class StiffnessMatrix:
                                      @ self.funSpace.shape_function_gradients[:, :, e]
 
     def compute_glob_stiff_stencil(self):
-        # Compute stiffness stencil matrices K_e, such that K can be assembled via K = sum_e (lambda_e*K_e)
-        # This can be done much more efficiently, but is precomputed and therefore not bottleneck.
+        """
+        Compute stiffness stencil matrices K_e, such that K can be assembled via K = sum_e (lambda_e*K_e)
+        This can be done much more efficiently, but is precomputed and therefore not bottleneck.
+        """
         if self.loc_stiff_grad is None:
             self.compute_loc_stiff_grad()
 
         equation_indices, k_index = self.compute_equation_indices()
 
-        glob_stiff_stencil = torch.empty((self.mesh.n_eq**2, self.mesh.n_cells))
+        # glob_stiff_stencil = torch.empty((self.mesh.n_eq**2, self.mesh.n_cells))
+        glob_stiff_stencil = sps.coo_matrix((self.mesh.n_eq**2, 0))
+
+        row_glob_stiff_grad = np.array([], dtype=np.uint32)
+        col_glob_stiff_grad = np.array([], dtype=np.uint32)
+        val_glob_stiff_grad = np.array([], dtype=np.float64)
 
         for e, cll in enumerate(self.mesh.cells):
             grad_loc_k = torch.zeros((4, 4, self.mesh.n_cells))
             grad_loc_k[:, :, e] = self.loc_stiff_grad[e]
             grad_loc_k = grad_loc_k.T.flatten()
-            Ke = sps.csr_matrix((grad_loc_k[k_index], (equation_indices[0], equation_indices[1])))
-            Ke_dense = torch.tensor(sps.csr_matrix.todense(Ke))
-            # Ke = sps.csr_matrix(Ke_dense)
-            self.glob_stiff_grad[:, e, :] = Ke_dense
-            glob_stiff_stencil[:, e] = Ke_dense.T.flatten()
-
+            k_vec = grad_loc_k[k_index]
+            mask = k_vec != 0
+            k_vec = k_vec[mask]
+            eq0 = equation_indices[0][mask]
+            eq1 = equation_indices[1][mask]
+            Ke = sps.coo_matrix((k_vec, (eq0, eq1)), shape=(self.mesh.n_eq, self.mesh.n_eq))
+            row_glob_stiff_grad = np.concatenate((row_glob_stiff_grad, e*self.mesh.n_eq + Ke.row))
+            col_glob_stiff_grad = np.concatenate((col_glob_stiff_grad, Ke.col))
+            val_glob_stiff_grad = np.concatenate((val_glob_stiff_grad, Ke.data))
+            glob_stiff_stencil = sps.hstack((glob_stiff_stencil, Ke.T.reshape(self.mesh.n_eq**2, 1)))
+            
+        glob_stiff_grad = sps.coo_matrix((val_glob_stiff_grad, (row_glob_stiff_grad, col_glob_stiff_grad))).tocsr()
         self.glob_stiff_stencil_scipy = sps.csr_matrix(glob_stiff_stencil)
-        glob_stiff_stencil = PETSc.Mat().createAIJ(
-            size=glob_stiff_stencil.shape, csr=(self.glob_stiff_stencil_scipy.indptr,
-                                                self.glob_stiff_stencil_scipy.indices,
-                                                self.glob_stiff_stencil_scipy.data))
+        glob_stiff_stencil = PETSc.Mat().createAIJ(size=(self.mesh.n_eq**2, self.mesh.n_cells),
+                                                   csr=(self.glob_stiff_stencil_scipy.indptr,
+                                                        self.glob_stiff_stencil_scipy.indices,
+                                                        self.glob_stiff_stencil_scipy.data))
         glob_stiff_stencil.assemblyBegin()
         glob_stiff_stencil.assemblyEnd()
+        glob_stiff_grad = PETSc.Mat().createAIJ(size=(self.mesh.n_cells*self.mesh.n_eq, self.mesh.n_eq),
+                                                           csr=(glob_stiff_grad.indptr,
+                                                                glob_stiff_grad.indices,
+                                                                glob_stiff_grad.data))
+        glob_stiff_grad.assemblyBegin()
+        glob_stiff_grad.assemblyEnd()
+        self.glob_stiff_grad = glob_stiff_grad
 
         self.glob_stiff_stencil = glob_stiff_stencil
-
 
     def find_sparsity_pattern(self):
         # Computes sparsity pattern of stiffness matrix/stiffness matrix vector for fast matrix assembly
