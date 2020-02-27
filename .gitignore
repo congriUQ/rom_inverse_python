@@ -25,6 +25,7 @@ slprj/
 *.pvd
 *.xdmf
 *.p
+*.pt
 
 # folders
 data/
