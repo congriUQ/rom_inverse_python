@@ -1,5 +1,7 @@
 import rom_inverse as ri
 import torch
+import matplotlib as mpl
+mpl.use('agg')
 import matplotlib.pyplot as plt
 from poisson_fem import PoissonFEM
 import ROM
@@ -20,10 +22,13 @@ assert pyro.__version__.startswith('1.2.1')
 pyro.enable_validation(True)       # can help with debugging
 
 print('inverse temperature beta == ', beta := 20)
-print('fom resolution == ', lin_dim_fom := 16, ' x ', lin_dim_fom)                      # Linear number of rom elements
+print('fom resolution == ', lin_dim_fom := 16, ' x ', lin_dim_fom)               # Linear number of rom elements
 a = torch.tensor([1, 1, 0])               # Boundary condition function coefficients
 permeability_length_scale = torch.tensor([.3, .1])
 permeability_variance = torch.tensor(2.)
+n_chains = 4
+n_samples = 500
+n_warmup = 100
 
 
 kernel = gp.kernels.RBF(input_dim=2, variance=permeability_variance, lengthscale=permeability_length_scale)
@@ -96,7 +101,7 @@ def conditioned_posterior(uf_observed):
 
 
 nuts_kernel = NUTS(conditioned_posterior(uf_observed))
-mcmc = MCMC(nuts_kernel, num_samples=100, warmup_steps=50, num_chains=6)
+mcmc = MCMC(nuts_kernel, num_samples=n_samples, warmup_steps=n_warmup, num_chains=n_chains)
 mcmc.run()
 mcmc.summary()
 torch.save(mcmc.get_samples()['x'], 'x_samples.pt')
@@ -115,7 +120,6 @@ im1 = plt.imshow(torch.mean(mcmc.get_samples()['x'], 0).view(lin_dim_fom, lin_di
 plt.colorbar(im1)
 now = datetime.now()   # current date and time
 plt.savefig(now.strftime("./%Y-%m-%d-%H-%M-%S") + f'inverse_problem_res={lin_dim_fom}')
-plt.show()
 
 
 
