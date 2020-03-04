@@ -75,14 +75,17 @@ class Mesh:
                 eq_list.append(vtx.equation_number)
         indices = torch.LongTensor([vtx_list, eq_list])
 
-        self.scatter_matrix_torch = torch.sparse.FloatTensor(indices, torch.ones(self.n_eq),
-                                                       torch.Size([self.n_vertices, self.n_eq]))
+        # self.scatter_matrix_torch = torch.sparse.FloatTensor(indices, torch.ones(self.n_eq),
+        #                                                torch.Size([self.n_vertices, self.n_eq]))
+        #
+        # # dense performs better for the time being -- change back here if that changes
+        # self.scatter_matrix_torch = self.scatter_matrix_torch.to_dense()
+        #
+        # # Best performance has PETSc
+        # tmp = sps.csr_matrix(self.scatter_matrix_torch)
 
-        # dense performs better for the time being -- change back here if that changes
-        self.scatter_matrix_torch = self.scatter_matrix_torch.to_dense()
-
-        # Best performance has PETSc
-        tmp = sps.csr_matrix(self.scatter_matrix_torch)
+        # tmp = sps.coo_matrix((torch.ones(self.n_eq), indices), shape=(self.n_vertices, self.n_eq)).tocsr()
+        tmp = sps.csr_matrix((torch.ones(self.n_eq), indices), shape=(self.n_vertices, self.n_eq))
         self.scatter_matrix = PETSc.Mat().createAIJ(size=tmp.shape, csr=(tmp.indptr, tmp.indices, tmp.data))
 
     def set_essential_boundary(self, location_indicator_fun, value_fun):
@@ -489,12 +492,26 @@ class StiffnessMatrix:
             eq0 = equation_indices[0][mask]
             eq1 = equation_indices[1][mask]
             Ke = sps.coo_matrix((k_vec, (eq0, eq1)), shape=(self.mesh.n_eq, self.mesh.n_eq))
-            row_glob_stiff_grad = np.concatenate((row_glob_stiff_grad, e*self.mesh.n_eq + Ke.row))
-            col_glob_stiff_grad = np.concatenate((col_glob_stiff_grad, Ke.col))
-            val_glob_stiff_grad = np.concatenate((val_glob_stiff_grad, Ke.data))
+            # row_glob_stiff_grad = np.concatenate((row_glob_stiff_grad, e*self.mesh.n_eq + Ke.row))
+            # col_glob_stiff_grad = np.concatenate((col_glob_stiff_grad, Ke.col))
+            # val_glob_stiff_grad = np.concatenate((val_glob_stiff_grad, Ke.data))
+
+            row_glob_stiff_grad_e = np.array(e * self.mesh.n_eq + Ke.row, dtype=np.uint32)
+            col_glob_stiff_grad_e = np.array(Ke.col, dtype=np.uint32)
+            val_glob_stiff_grad_e = Ke.data
+            row_glob_stiff_grad_e = row_glob_stiff_grad_e[val_glob_stiff_grad_e != 0]
+            col_glob_stiff_grad_e = col_glob_stiff_grad_e[val_glob_stiff_grad_e != 0]
+            val_glob_stiff_grad_e = val_glob_stiff_grad_e[val_glob_stiff_grad_e != 0]
+
+            row_glob_stiff_grad = np.concatenate((row_glob_stiff_grad, row_glob_stiff_grad_e))
+            col_glob_stiff_grad = np.concatenate((col_glob_stiff_grad, col_glob_stiff_grad_e))
+            val_glob_stiff_grad = np.concatenate((val_glob_stiff_grad, val_glob_stiff_grad_e))
+
             glob_stiff_stencil = sps.hstack((glob_stiff_stencil, Ke.T.reshape(self.mesh.n_eq**2, 1)))
 
-        glob_stiff_grad = sps.coo_matrix((val_glob_stiff_grad, (row_glob_stiff_grad, col_glob_stiff_grad))).tocsr()
+        # glob_stiff_grad = sps.coo_matrix((val_glob_stiff_grad, (row_glob_stiff_grad, col_glob_stiff_grad))).tocsr()
+        glob_stiff_grad = sps.csr_matrix((val_glob_stiff_grad, (row_glob_stiff_grad, col_glob_stiff_grad)))
+
         self.glob_stiff_stencil_scipy = sps.csr_matrix(glob_stiff_stencil)
         glob_stiff_stencil = PETSc.Mat().createAIJ(size=(self.mesh.n_eq**2, self.mesh.n_cells),
                                                    csr=(self.glob_stiff_stencil_scipy.indptr,
@@ -548,19 +565,22 @@ class StiffnessMatrix:
 
 class RightHandSide:
     # This is the finite element force vector
-    def __init__(self, mesh):
+    def __init__(self, mesh, batched_version=False):
         self.vector = PETSc.Vec().createSeq(mesh.n_eq)    # Force vector
-        self.vector_torch = None
         self.flux_boundary_condition = None
         self.source_field = None
-        self.natural_rhs = PETSc.Vec().createSeq(mesh.n_eq)
-        self.natural_rhs_torch = None
         self.cells_with_essential_boundary = []    # precompute for performance
         self.find_cells_with_essential_boundary(mesh)
         # Use nnz = 0, PETSc will allocate  additional storage by itself
         self.rhs_stencil = PETSc.Mat().createAIJ(size=(mesh.n_eq, mesh.n_cells), nnz=0)
         self.rhs_stencil.setOption(PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, False)
-        self.rhs_stencil_torch = torch.zeros((mesh.n_eq, mesh.n_cells), dtype=mesh.dtype)
+        self.batched_version = batched_version
+        if self.batched_version:
+            self.natural_rhs_torch = None
+            self.vector_torch = None
+            self.rhs_stencil_torch = torch.zeros((mesh.n_eq, mesh.n_cells), dtype=mesh.dtype)
+        else:
+            self.natural_rhs = PETSc.Vec().createSeq(mesh.n_eq)
 
     def set_flux_boundary_condition(self, mesh, flux):
         # Contribution due to flux boundary conditions
@@ -707,8 +727,10 @@ class RightHandSide:
                     if self.source_field is not None:
                         natural_rhs[vtx.equation_number] += self.source_field[v, e]
 
-        self.natural_rhs.setValues(range(mesh.n_eq), natural_rhs)
-        self.natural_rhs_torch = torch.tensor(self.natural_rhs.getArray(), dtype=mesh.dtype).unsqueeze(1)
+        if self.batched_version:
+            self.natural_rhs_torch = torch.tensor(self.natural_rhs.getArray(), dtype=mesh.dtype).unsqueeze(1)
+        else:
+            self.natural_rhs.setValues(range(mesh.n_eq), natural_rhs)
 
     def find_cells_with_essential_boundary(self, mesh):
         for cll in mesh.cells:
@@ -725,13 +747,13 @@ class RightHandSide:
 
             loc_ess_bc = stiffness_matrix.loc_stiff_grad[c] @ essential_boundary_values
             for v, vtx in enumerate(mesh.cells[c].vertices):
-                if vtx.equation_number is not None:
+                if vtx.equation_number is not None and self.batched_version:
                     self.rhs_stencil_torch[vtx.equation_number, c] -= loc_ess_bc[v]
 
         # Assemble PETSc matrix from numpy
         for c in self.cells_with_essential_boundary:
             for vtx in mesh.cells[c].vertices:
-                if vtx.equation_number is not None:
+                if vtx.equation_number is not None and self.batched_version:
                     self.rhs_stencil.setValue(vtx.equation_number, c, self.rhs_stencil_torch[vtx.equation_number, c])
         self.rhs_stencil.assemblyBegin()
         self.rhs_stencil.assemblyEnd()

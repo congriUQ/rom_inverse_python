@@ -16,29 +16,32 @@ class DiscretizedRandomField:
     """
 
     """
-    def __init__(self, kernel=gp.kernels.RBF(input_dim=2),
-                 discretization_vector=(torch.linspace(.5/16, 15.5/16, 16), torch.linspace(.5/16, 15.5/16, 16)),
-                 nugget=1e-5):
+    def __init__(self, resolution, kernel=gp.kernels.RBF(input_dim=2), nugget=1e-5):
         self.kernel = kernel
         self.nugget = nugget # to make the covariance matrix positive definite
         # self.gp_regressor = GaussianProcessRegressor(self.kernel)
         self.squashing_function = torch.exp
 
-        assert isinstance(discretization_vector, (list, tuple)), "discretization_vector must be list/tuple of " \
-                                                                 "1 or 2 discretization vectors"
-        self.discretization_vector = discretization_vector
-        if len(self.discretization_vector) < 2:
-            # If discretization in y-direction is not given, use the same as in x-direction
-            self.discretization_vector.append(self.discretization_vector)
+        if len(resolution) < 2:
+            self.discretization_vector = torch.linspace(.5/resolution[0], (resolution[0] - .5)/resolution[0],
+                                                        resolution[0])
+            self.discretization_vector = (self.discretization_vector, self.discretization_vector)
+        else:
+            self.discretization_vector = (torch.linspace(.5/resolution[0], (resolution[0] - .5)/resolution[0],
+                                                         resolution[0]),
+                                     torch.linspace(.5/resolution[1], (resolution[1] - .5)/resolution[1], resolution[1]))
+
         grid = torch.meshgrid(self.discretization_vector[0], self.discretization_vector[1])
         self.X = torch.cat((grid[0].flatten().unsqueeze(1), grid[1].flatten().unsqueeze(1)), 1)
         self.log_permeability_cov = None
+        self.log_permeability_scale_tril = None
 
-    def get_covariance_matrix(self):
+    def set_covariance_matrix(self):
         # this can be memory intensive for large systems!
         if self.log_permeability_cov is None:
             self.log_permeability_cov = self.kernel.forward(self.X) + self.nugget*torch.eye(self.X.shape[0])
-        return self.log_permeability_cov
+            self.log_permeability_scale_tril = torch.cholesky(self.log_permeability_cov)
+        # return self.log_permeability_cov
 
     def sample_log_permeability(self, n_samples=1):
         """
@@ -46,8 +49,8 @@ class DiscretizedRandomField:
         :param n_samples: Number of Gaussian process realizations
         :return: The discretized realization
         """
-        cov = self.get_covariance_matrix()  # can be memory consuming for large systems
-        samples = dist.MultivariateNormal(torch.zeros(self.X.shape[0]), covariance_matrix=cov). \
+        self.set_covariance_matrix()  # can be memory consuming for large systems
+        samples = dist.MultivariateNormal(torch.zeros(self.X.shape[0]), scale_tril=self.log_permeability_scale_tril).\
             sample(sample_shape=(n_samples,))
         # sample = torch.tensor(self.gp_regressor.sample_y(self.X.detach().numpy(), n_samples))
         return samples
