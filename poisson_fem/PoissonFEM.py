@@ -579,8 +579,7 @@ class RightHandSide:
             self.natural_rhs_torch = None
             self.vector_torch = None
             self.rhs_stencil_torch = torch.zeros((mesh.n_eq, mesh.n_cells), dtype=mesh.dtype)
-        else:
-            self.natural_rhs = PETSc.Vec().createSeq(mesh.n_eq)
+        self.natural_rhs = PETSc.Vec().createSeq(mesh.n_eq)
 
     def set_flux_boundary_condition(self, mesh, flux):
         # Contribution due to flux boundary conditions
@@ -776,7 +775,9 @@ class RightHandSide:
         :param x:
         :return:
         """
-        self.vector_torch = self.natural_rhs_torch + torch.bmm(self.rhs_stencil_torch, x)
+        print('x.shape = ', x.shape)
+        print('self.rhs_stencil_torch.shape == ', self.rhs_stencil_torch.shape)
+        self.vector_torch = self.natural_rhs_torch + torch.bmm(self.rhs_stencil_torch, x.unsqueeze(2))
 
     def state_dict(self):
         return {'vector': self.vector.array,

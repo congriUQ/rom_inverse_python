@@ -2,6 +2,7 @@ import torch
 import sklearn.gaussian_process.kernels as kernels
 from sklearn.gaussian_process import GaussianProcessRegressor
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import os
 import pyro
 import pyro.distributions as dist
@@ -68,10 +69,14 @@ class DiscretizedRandomField:
         realization = self.sample_permeability(n_samples)
         fig = plt.figure(figsize=(30, 20))
         for r in range(realization.shape[0]):
-            ax = plt.subplot(realization.shape[0], 1, r + 1)
+            ax = plt.subplot(1, realization.shape[0], r + 1)
             img = ax.imshow(realization[r, :].view(len(self.discretization_vector[0]),
                                              len(self.discretization_vector[1])))
-            plt.colorbar(img)
+
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.1)
+
+            plt.colorbar(img, cax=cax)
 
 
 

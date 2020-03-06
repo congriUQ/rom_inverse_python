@@ -28,8 +28,8 @@ class Data:
         self.n_unsupervised_samples = len(unsupervised_samples)
         self.path = ''                    # path to input data folder
         self.solution_folder = ''
-        self.output = []                  # response field, i.e., output data
-        self.input = []
+        self.output = None                  # response field, i.e., output data
+        self.input = None
 
 
 class DarcyData(Data):
@@ -146,9 +146,12 @@ class DarcyData(Data):
             torch.save(permeability_sample, self.path + f'permeability{n}.pt')
             torch.save(solution, self.path + f'solution{n}.pt')
 
-    def load_input_data(self):
-        pass
-
+    def load(self):
+        self.input = torch.empty(self.n_supervised_samples, self.resolution[0]*self.resolution[1])
+        self.output = torch.empty(self.n_supervised_samples, (self.resolution[0] + 1)*(self.resolution[1] + 1))
+        for n in self.supervised_samples:
+            self.input[n, :] = torch.load(self.path + f'permeability{n}.pt')
+            self.output[n, :] = torch.load(self.path + f'solution{n}.pt')
 
 
 class StokesData(Data):
