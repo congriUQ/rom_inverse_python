@@ -47,8 +47,13 @@ class ROM:
             # outer gradient w.r.t. degrees of freedom uc
             self.grad_uc = PETSc.Vec().createSeq(mesh.n_eq)
 
+            # For performance tracking
+            self.n_forward_calls = 0
+            self.n_backward_calls = 0
+
     def solve(self, lmbda):
         # lmbda is a 1D numpy array of !positive! conductivities/permeabilities
+        self.n_forward_calls += 1
         lmbda = PETSc.Vec().createWithArray(lmbda + 1e-12)
         self.stiffnessMatrix.assemble(lmbda)
         self.rhs.assemble(lmbda)
@@ -89,6 +94,7 @@ class ROM:
     def solve_adjoint(self, grad_output):
         # Call only after stiffness matrix has already been assembled!
         # grad_output is typically dlog_Pcf_du
+        self.n_backward_calls += 1
         self.stiffnessMatrix.solver.solveTranspose(grad_output, self.adjoints)
 
     def solve_adjoint_batched(self, grad_output):

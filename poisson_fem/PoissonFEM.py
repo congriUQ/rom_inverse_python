@@ -294,7 +294,6 @@ class Cell:
         # Returns a list of the values [N_0^(c)(x), N_1^(c)(x), N_2^(c)(x), N_3^(c)(x)] of the element shape
         # functions of x, and a list [global_number0, ...,  global_number3] of global vertex numbers
         shape_fun_values = []
-        glob_vertex_numbers = []
         isin = self.is_inside(x)
         shape_fun_values.append(isin*(x[:, 0] - self.vertices[1].coordinates[0]) *
                                         (x[:, 1] - self.vertices[3].coordinates[1]) / self.surface)
