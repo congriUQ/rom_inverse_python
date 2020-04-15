@@ -172,13 +172,18 @@ class RectangularMesh(Mesh):
             # assume square mesh
             grid_y = grid_x
 
+        # minor stuff
+        self.n_el_x = len(grid_x)
+        self.n_el_y = len(grid_y)
+
         # Create vertices
         x_coord = torch.cat((torch.zeros(1), torch.cumsum(grid_x, 0)))
         y_coord = torch.cat((torch.zeros(1), torch.cumsum(grid_y, 0)))
         n = 0
         for row_index, y in enumerate(y_coord):
             for col_index, x in enumerate(x_coord):
-                self.create_vertex(torch.tensor([x, y]), globalVertexNumber=n, row_index=row_index, col_index=col_index)
+                m = self.glob_node_number_flip(n)   # otherwise we'd flip x and y in interpolation
+                self.create_vertex(torch.tensor([x, y]), globalVertexNumber=m, row_index=row_index, col_index=col_index)
                 n += 1
 
         self.essential_solution_vector = PETSc.Vec().createSeq(self.n_vertices)
@@ -208,9 +213,8 @@ class RectangularMesh(Mesh):
                 self.create_cell(vtx, edg, number=n)
                 n += 1
 
-        # minor stuff
-        self.n_el_x = len(grid_x)
-        self.n_el_y = len(grid_y)
+    def glob_node_number_flip(self, node_number):
+        return (node_number % (self.n_el_x + 1)*(self.n_el_y + 1) + node_number // (self.n_el_x + 1))
 
     def state_dict(self):
         return {'dtype': self.dtype,
